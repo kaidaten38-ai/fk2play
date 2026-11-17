@@ -25,6 +25,12 @@ public class UsbTransport implements Transport {
     private final UsbEndpoint in;
     private final UsbEndpoint out;
     private volatile boolean closed;
+    /**
+     * Tampon intermediaire des lectures, reutilise (un seul thread lit : « dongle-reader »).
+     * Avant, 16 Ko etaient alloues a chaque message de plus de 16 Ko, donc a presque chaque
+     * image : du travail inutile pour le ramasse-miettes d'Android 4.0, donc des a-coups.
+     */
+    private byte[] readTmp;
 
     public static boolean isDongle(UsbDevice d) {
         if (d == null || d.getVendorId() != VENDOR_ID) return false;
@@ -70,7 +76,7 @@ public class UsbTransport implements Transport {
         int fastFailures = 0;
         // bulkTransfer(endpoint, buffer, length, timeout) n'a pas d'offset avant l'API 18 :
         // on passe par un tampon temporaire si necessaire.
-        byte[] tmp = null;
+        byte[] tmp = readTmp;
         while (done < len) {
             // Session arretee (stop() interrompt ce thread) : on sort au plus tard apres un delai de lecture.
             if (closed || Thread.currentThread().isInterrupted()) throw new IOException("Transport ferme");
@@ -80,7 +86,7 @@ public class UsbTransport implements Transport {
             if (off == 0 && done == 0) {
                 n = conn.bulkTransfer(in, buf, want, READ_TIMEOUT_MS);
             } else {
-                if (tmp == null || tmp.length < want) tmp = new byte[want];
+                if (tmp == null) tmp = readTmp = new byte[MAX_CHUNK];
                 n = conn.bulkTransfer(in, tmp, want, READ_TIMEOUT_MS);
                 if (n > 0) System.arraycopy(tmp, 0, buf, off + done, n);
             }
@@ -105,6 +111,7 @@ public class UsbTransport implements Transport {
     @Override
     public void write(byte[] data) throws IOException {
         int done = 0;
+        int stalls = 0;
         byte[] tmp = null;
         while (done < data.length) {
             if (closed) throw new IOException("Transport ferme");
@@ -118,6 +125,10 @@ public class UsbTransport implements Transport {
                 n = conn.bulkTransfer(out, tmp, want, 1000);
             }
             if (n < 0) throw new IOException("Ecriture USB echouee");
+            // 0 octet accepte a repetition : sans cette limite, la boucle tournerait sans fin
+            // en gardant le verrou d'ecriture (plus de battement de coeur, plus de tactile).
+            if (n == 0 && ++stalls >= MAX_FAST_FAILURES) throw new IOException("Ecriture USB bloquee");
+            if (n > 0) stalls = 0;
             done += n;
         }
     }

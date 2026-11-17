@@ -36,6 +36,18 @@
         <item>on</item>
         <item>off</item>
     </string-array>
+    <string-array name="decode_threads_labels">
+        <item>Automatique (comportement d\'origine)</item>
+        <item>1</item>
+        <item>2</item>
+        <item>4</item>
+    </string-array>
+    <string-array name="decode_threads_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>4</item>
+    </string-array>
     <string-array name="video_format_labels">
         <item>Automatique (recommande)</item>
         <item>RGB565 (16 bits)</item>

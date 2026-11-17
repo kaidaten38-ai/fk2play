@@ -130,7 +130,19 @@ static int render(Decoder *d, AVFrame *f) {
     ANativeWindow_Buffer buf;
     int64_t t0 = now_us();
     if (ANativeWindow_lock(d->window, &buf, NULL) != 0) return 0;
-    if (buf.width < f->width) { ANativeWindow_unlockAndPost(d->window); return 0; }
+    /*
+     * Garde-fou memoire : on n'ecrit que si le tampon rendu par l'ecran a bien la largeur ET
+     * le nombre d'octets par pixel attendus. Si setBuffersGeometry n'a pas ete applique
+     * (tampon reste en RGB565 alors qu'on convertit en RGBX), sws_scale ecrirait deux fois
+     * la taille du tampon. On redemandera la geometrie a l'image suivante.
+     */
+    int buf_bpp = (buf.format == WINDOW_FORMAT_RGB_565) ? 2
+                : (buf.format == WINDOW_FORMAT_RGBA_8888 || buf.format == WINDOW_FORMAT_RGBX_8888) ? 4 : 0;
+    if (buf.bits == NULL || buf.width < f->width || buf.stride < f->width || buf_bpp != bpp(fmt)) {
+        ANativeWindow_unlockAndPost(d->window);
+        d->geom_ok = 0;
+        return 0;
+    }
     int64_t t1 = now_us();
     uint8_t *dst[4] = {(uint8_t *) buf.bits, NULL, NULL, NULL};
     int dst_stride[4] = {buf.stride * bpp(fmt), 0, 0, 0};
@@ -146,6 +158,9 @@ static int render(Decoder *d, AVFrame *f) {
     return 1;
 }
 
+JNIEXPORT void JNICALL
+Java_com_fk2play_video_FfmpegDecoder_nativeRelease(JNIEnv *env, jclass cls, jlong handle);
+
 JNIEXPORT jlong JNICALL
 Java_com_fk2play_video_FfmpegDecoder_nativeInit(JNIEnv *env, jclass cls,
                                                  jint width, jint height, jint threads, jint format) {
@@ -158,6 +173,7 @@ Java_com_fk2play_video_FfmpegDecoder_nativeInit(JNIEnv *env, jclass cls,
     Decoder *d = (Decoder *) calloc(1, sizeof(Decoder));
     if (!d) return 0;
     d->ctx = avcodec_alloc_context3(codec);
+    if (!d->ctx) { free(d); return 0; }
     d->ctx->width = width;
     d->ctx->height = height;
     d->ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
@@ -181,6 +197,12 @@ Java_com_fk2play_video_FfmpegDecoder_nativeInit(JNIEnv *env, jclass cls,
     pthread_mutex_init(&d->mail_m, NULL);
     pthread_mutex_init(&d->win_m, NULL);
     d->pkt = av_packet_alloc();
+    if (!d->frame || !d->last || !d->mail || !d->rframe || !d->pkt) {
+        /* Memoire insuffisante : on libere tout plutot que de dereferencer NULL plus tard. */
+        LOGE("Allocation du decodeur impossible");
+        Java_com_fk2play_video_FfmpegDecoder_nativeRelease(env, cls, (jlong) (intptr_t) d);
+        return 0;
+    }
     LOGI("Decodeur pret (%d threads)", d->ctx->thread_count);
     return (jlong) (intptr_t) d;
 }
@@ -239,6 +261,11 @@ Java_com_fk2play_video_FfmpegDecoder_nativeDecode(JNIEnv *env, jclass cls, jlong
         if (!d->in) { d->in_cap = 0; return -1; }
     }
     (*env)->GetByteArrayRegion(env, data, off, len, (jbyte *) d->in);
+    /* off/len hors du tableau Java : rien n'a ete copie, on ne decode pas un tampon non initialise. */
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return -1;
+    }
     memset(d->in + len, 0, AV_INPUT_BUFFER_PADDING_SIZE);
 
     d->pkt->data = d->in;

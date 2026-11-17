@@ -43,6 +43,12 @@ public class VideoPipeline {
     private static final long FAST_EXIT_MS = 3000;
     /** Au retour, on reaffiche la derniere image si elle a moins de 10 s. */
     private static final long LAST_IMAGE_MAX_AGE_MS = 10000;
+    /**
+     * Taille maximale d'une image compressee. Le protocole accepte des messages de 4 Mo ; sans
+     * cette borne, quelques en-tetes corrompus suffiraient a faire grossir les 6 tampons recycles
+     * jusqu'a epuiser la memoire Java de l'autoradio (OutOfMemoryError = plantage).
+     */
+    static final int MAX_FRAME_BYTES = 1024 * 1024;
 
     private static final class Frame {
         byte[] d = new byte[64 * 1024];
@@ -138,7 +144,7 @@ public class VideoPipeline {
     /** Appele depuis le thread USB. */
     public void submit(int w, int h, byte[] data, int off, int len) {
         // Dimensions aberrantes (trame corrompue) : on ignore plutot que d'allouer un tampon geant.
-        if (w < 16 || h < 16 || w > 1920 || h > 1088 || len <= 0) return;
+        if (w < 16 || h < 16 || w > 1920 || h > 1088 || len <= 0 || len > MAX_FRAME_BYTES) return;
         if (surface == null && !backgroundDecode) {
             // Sans ecran, les images sont ignorees (economie de calcul pour le Honda).
             stale = true;
@@ -260,7 +266,10 @@ public class VideoPipeline {
                     keyframeRetries++;
                     askKeyframe();
                 }
-                if (fast && now - lastBacklog > FAST_EXIT_MS) setFast(false);
+                // Sous verrou : le thread UI peut liberer le decodeur au meme moment (setSurface, release).
+                synchronized (lock) {
+                    if (fast && now - lastBacklog > FAST_EXIT_MS) setFast(false);
+                }
                 Frame f = queue.poll(100, TimeUnit.MILLISECONDS);
                 if (f == null) continue;
                 try {
@@ -270,6 +279,18 @@ public class VideoPipeline {
                 }
             }
         } catch (InterruptedException ignored) {
+        } finally {
+            // Le thread s'arrete de lui-meme (aucun decodeur disponible) : on l'oublie pour que
+            // le prochain ecran puisse relancer la video au lieu de rester noir jusqu'au
+            // redemarrage du service.
+            synchronized (lock) {
+                if (thread == Thread.currentThread()) {
+                    running = false;
+                    thread = null;
+                    if (displayThread != null) displayThread.interrupt();
+                    displayThread = null;
+                }
+            }
         }
     }
 

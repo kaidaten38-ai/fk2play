@@ -93,7 +93,7 @@ public class MicTestActivity extends Activity {
                 int bestSource = -1, bestRate = 0, bestRms = 0;
                 for (int src : MicInput.AUTO_SOURCES) {
                     for (int rate : MicInput.RATES) {
-                        if (!running) return;
+                        if (!running) { aborted(); return; }
                         int[] r = measure(src, rate);
                         String name = src < SOURCE_NAMES.length ? SOURCE_NAMES[src] : String.valueOf(src);
                         String res;
@@ -110,6 +110,16 @@ public class MicTestActivity extends Activity {
                 finish(bestSource, bestRate, bestRms);
             }
         }, "mic-test").start();
+    }
+
+    /** Test interrompu (ecran quitte) : le bouton redevient utilisable au retour. */
+    private void aborted() {
+        ui.post(new Runnable() {
+            public void run() {
+                verdict.setText("Test interrompu.");
+                start.setEnabled(true);
+            }
+        });
     }
 
     /** {pourcentage de donnees recues (-1 si bloque), niveau RMS}, ou null si refuse. */

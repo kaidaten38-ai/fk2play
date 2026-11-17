@@ -50,6 +50,14 @@ public class ProtocolTest {
         String next() throws InterruptedException { String s = events.poll(3, TimeUnit.SECONDS); return s == null ? "(timeout)" : s; }
     }
 
+    static byte[] header(int magic, int len, int type, int check) {
+        return le(16).putInt(magic).putInt(len).putInt(type).putInt(check).array();
+    }
+
+    static boolean rejects(byte[] h) {
+        try { Msg.decodeHeader(h); return false; } catch (Msg.ProtocolException e) { return true; }
+    }
+
     static ByteBuffer le(int n) { return ByteBuffer.allocate(n).order(ByteOrder.LITTLE_ENDIAN); }
 
     public static void main(String[] a) throws Exception {
@@ -150,6 +158,36 @@ public class ProtocolTest {
         check(beats >= 1, "heartbeat envoye toutes les 2 s (" + beats + ")");
 
         s.stop();
+
+        System.out.println("== Trames corrompues (robustesse) ==");
+        check(rejects(header(0x12345678, 0, Msg.HEARTBEAT, ~Msg.HEARTBEAT)), "magic invalide rejete");
+        check(rejects(header(Msg.MAGIC, -1, Msg.VIDEO_DATA, ~Msg.VIDEO_DATA)), "longueur negative rejetee");
+        check(rejects(header(Msg.MAGIC, 4 * 1024 * 1024 + 1, Msg.VIDEO_DATA, ~Msg.VIDEO_DATA)), "longueur > 4 Mo rejetee");
+        check(rejects(header(Msg.MAGIC, Integer.MAX_VALUE, Msg.VIDEO_DATA, ~Msg.VIDEO_DATA)), "longueur 2 Go rejetee");
+        check(!rejects(header(Msg.MAGIC, 4 * 1024 * 1024, Msg.VIDEO_DATA, ~Msg.VIDEO_DATA)), "longueur 4 Mo acceptee (borne)");
+        check(rejects(new byte[8]), "en-tete tronque rejete");
+
+        // Messages trop courts pour leur type : ignores sans exception ni evenement.
+        FakeTransport tr2 = new FakeTransport();
+        Recorder rec2 = new Recorder();
+        DongleSession s2 = new DongleSession(tr2, new DongleConfig(), rec2);
+        s2.start();
+        tr2.dongleSends(new Msg(Msg.VIDEO_DATA, new byte[20]));          // en-tete video sans image
+        tr2.dongleSends(new Msg(Msg.VIDEO_DATA, new byte[3]));           // en-tete video tronque
+        tr2.dongleSends(new Msg(Msg.AUDIO_DATA, new byte[11]));          // en-tete audio tronque
+        tr2.dongleSends(new Msg(Msg.AUDIO_DATA, new byte[12]));          // en-tete audio sans son
+        tr2.dongleSends(new Msg(Msg.PLUGGED, new byte[0]));              // PLUGGED vide
+        check(rec2.next().equals("connected:0:false"), "messages trop courts ignores, PLUGGED vide tolere");
+        tr2.dongleSends(new Msg(0x7777, new byte[64]));                  // type inconnu
+        tr2.dongleSends(new Msg(Msg.UNPLUGGED, null));
+        check(rec2.next().equals("disconnected"), "type inconnu ignore, la session continue");
+        // Desynchronisation : octets quelconques a la place d'un en-tete -> erreur signalee, session arretee.
+        tr2.dongleOut.write(new byte[16]); tr2.dongleOut.flush();
+        check(rec2.next().startsWith("error:Magic invalide"), "flux desynchronise -> erreur signalee");
+        Thread.sleep(100);
+        check(!s2.isRunning(), "session arretee apres desynchronisation");
+        s2.stop();
+
         System.out.println(failures == 0 ? "\nTOUS LES TESTS PASSENT" : "\n" + failures + " ECHEC(S)");
         System.exit(failures == 0 ? 0 : 1);
     }

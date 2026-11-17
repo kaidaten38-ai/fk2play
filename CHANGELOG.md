@@ -1,5 +1,24 @@
 # Historique des versions
 
+## 2.1-dev — non publiée (correctifs de robustesse, à valider en voiture)
+
+Non compilée ni essayée en voiture au moment de l'écriture : à valider avant toute publication.
+
+- **Sécurité mémoire (natif)** : l'affichage n'écrit plus dans le tampon de l'écran si son format ou
+  sa largeur ne correspondent pas à la conversion en cours ; allocations et bornes vérifiées.
+- **Récepteur USB** : l'état réel (permission, présence du dongle) est revérifié auprès d'Android au
+  lieu de croire le contenu d'une diffusion que toute appli peut envoyer.
+- **Service volant Honda** : liaison explicite au service système quand il est identifiable.
+- **Mémoire** : image compressée bornée à 1 Mo ; tampon de lecture USB réutilisé (plus d'allocation
+  par image).
+- **Micro** : enchaînement Siri → appel sans capture en double ni bascule à tort sur le micro du dongle.
+- **Vidéo** : relance possible après « aucun décodeur » ; accès au décodeur toujours sous verrou ;
+  réglage de diagnostic *Threads de décodage vidéo*.
+- **Divers** : écriture USB bloquée détectée, tâches différées annulées à l'arrêt du service, test du
+  micro relançable après interruption, thread d'injection arrêté proprement.
+- **Outillage** : wrapper Gradle 8.14.3, APK debug produit par la CI, jeton CI en lecture seule,
+  tests du protocole sur trames corrompues.
+
 ## 2.0 — 16 novembre 2026 (première version stable)
 
 Première version qui n'est plus une bêta : validée en voiture (Civic Type R FK2, Honda Connect RC3,

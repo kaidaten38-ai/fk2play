@@ -4,6 +4,10 @@ on:
   push:
   workflow_dispatch:
 
+# Jeton GitHub en lecture seule : la compilation n'a besoin d'aucun droit d'ecriture sur le depot.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -49,10 +53,10 @@ jobs:
         run: ./scripts/run_protocol_tests.sh
 
       - name: APK
-        run: gradle :app:assembleRelease --no-daemon
+        run: gradle :app:assembleDebug :app:assembleRelease --no-daemon
 
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
           name: FK2Play-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/**/*.apk

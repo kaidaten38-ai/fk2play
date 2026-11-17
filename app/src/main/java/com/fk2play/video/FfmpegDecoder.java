@@ -27,11 +27,19 @@ public class FfmpegDecoder implements VideoDecoder {
     private long handle;
     /** Diagnostic : 0 = automatique (mesure sur l'appareil), 1 = RGB565, 2 = RGBX. */
     public static volatile int forcedFormat;
+    /**
+     * Diagnostic : nombre de threads de decodage FFmpeg ; 0 = automatique (coeurs allumes au
+     * moment de l'ouverture, comportement d'origine). Le Tegra 3 eteint ses coeurs au repos :
+     * « automatique » peut donc n'en voir qu'un. A comparer en voiture avec le journal
+     * « Par image : decodage ... ms ».
+     */
+    public static volatile int forcedThreads;
 
     @Override
     public boolean init(Surface surface, int width, int height) {
         if (!loaded) return false;
-        handle = nativeInit(width, height, Runtime.getRuntime().availableProcessors(), forcedFormat);
+        int threads = forcedThreads > 0 ? forcedThreads : Runtime.getRuntime().availableProcessors();
+        handle = nativeInit(width, height, threads, forcedFormat);
         if (handle != 0 && surface != null) nativeSetWindow(handle, surface, false);
         return handle != 0;
     }

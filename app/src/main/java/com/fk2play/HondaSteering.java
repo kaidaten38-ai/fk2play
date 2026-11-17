@@ -90,8 +90,16 @@ public final class HondaSteering {
 
     private volatile int injecting = -1;
 
+    /** Apres unbind(), le thread d'injection est arrete : la tache est simplement ignoree. */
+    private void runInjector(Runnable r) {
+        try {
+            injector.execute(r);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        }
+    }
+
     private void giveBack(final int keyCode) {
-        injector.execute(new Runnable() {
+        runInjector(new Runnable() {
             public void run() {
                 String how = "rendue au Honda";
                 injecting = keyCode;
@@ -111,11 +119,37 @@ public final class HondaSteering {
         });
     }
 
+    /**
+     * Intent vers le service volant. Une liaison par simple nom d'action peut etre captee par
+     * n'importe quelle appli qui declare la meme action ; on vise donc explicitement le service
+     * fourni par une appli SYSTEME (celui du Honda Connect). Si aucun n'est marque systeme, on
+     * garde la liaison par action comme avant (jamais pire que l'existant).
+     */
+    private Intent steeringIntent() {
+        Intent i = new Intent(ACTION);
+        try {
+            java.util.List<android.content.pm.ResolveInfo> found =
+                    ctx.getPackageManager().queryIntentServices(i, 0);
+            if (found != null) {
+                for (android.content.pm.ResolveInfo r : found) {
+                    if (r.serviceInfo == null || r.serviceInfo.applicationInfo == null) continue;
+                    if ((r.serviceInfo.applicationInfo.flags
+                            & android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0) continue;
+                    i.setComponent(new ComponentName(r.serviceInfo.packageName, r.serviceInfo.name));
+                    android.util.Log.i("FK2Play", "Service volant Honda : " + r.serviceInfo.packageName);
+                    break;
+                }
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return i;
+    }
+
     /** A appeler une fois (creation du service CarPlay). */
     void bind() {
         if (bound) return;
         try {
-            bound = ctx.bindService(new Intent(ACTION), conn, Context.BIND_AUTO_CREATE);
+            bound = ctx.bindService(steeringIntent(), conn, Context.BIND_AUTO_CREATE);
         } catch (RuntimeException e) {
             bound = false;
         }
@@ -129,6 +163,9 @@ public final class HondaSteering {
         }
         bound = false;
         service = null;
+        // Sans cela, un thread « pool » restait en vie a chaque arret/relance du service.
+        main.removeCallbacks(reactivate);
+        injector.shutdown();
     }
 
     /** Vrai pendant qu'une touche volume est rendue au Honda : l'ecran ne doit pas la traiter. */
@@ -158,7 +195,7 @@ public final class HondaSteering {
     void giveBackVolume(final int keyCode) {
         final long windowMs = readInt("volume_window", 3) * 1000L;
         main.removeCallbacks(reactivate);
-        injector.execute(new Runnable() {
+        runInjector(new Runnable() {
             public void run() {
                 givingBack = true;
                 try {

@@ -36,7 +36,8 @@ public class MicInput {
     private final int prefRate;     // 0 = automatique
     private final ArrayBlockingQueue<short[]> frames = new ArrayBlockingQueue<short[]>(10);
     private volatile boolean running;
-    private Thread capture, sender;
+    /** volatile : chaque boucle verifie qu'elle est toujours le thread en titre. */
+    private volatile Thread capture, sender;
 
     public MicInput(Context ctx, DongleSession session) {
         this.session = session;
@@ -53,10 +54,24 @@ public class MicInput {
         if (running) return;
         running = true;
         frames.clear();
-        capture = new Thread(new Runnable() { public void run() { captureLoop(); } }, "mic-capture");
+        // Arret puis redemarrage rapproches (fin de Siri -> debut d'appel) : l'ancienne capture,
+        // bloquee dans AudioRecord.read(), ne voyait jamais « running » repasser a faux. Elle
+        // continuait en double, et la nouvelle, micro encore occupe, basculait a tort sur le
+        // micro du dongle. Chaque thread sait maintenant s'il a ete remplace, et la nouvelle
+        // capture attend que l'ancienne ait libere le micro.
+        final Thread previous = lastCapture;
+        capture = new Thread(new Runnable() { public void run() { captureLoop(previous); } }, "mic-capture");
+        lastCapture = capture;
         sender = new Thread(new Runnable() { public void run() { sendLoop(); } }, "mic-send");
         capture.start();
         sender.start();
+    }
+
+    /** Derniere capture lancee (peut encore tenir le micro quelques dizaines de ms apres stop()). */
+    private Thread lastCapture;
+
+    private boolean current(Thread role) {
+        return running && role == Thread.currentThread();
     }
 
     public synchronized void stop() {
@@ -80,7 +95,11 @@ public class MicInput {
         return null;
     }
 
-    private void captureLoop() {
+    private void captureLoop(Thread previous) {
+        if (previous != null && previous.isAlive()) {
+            try { previous.join(500); } catch (InterruptedException e) { return; }
+        }
+        if (!current(capture)) return;
         AudioRecord rec = null;
         int rate = 0, source = -1;
         int[] sources = prefSource >= 0 ? new int[]{prefSource} : AUTO_SOURCES;
@@ -102,7 +121,7 @@ public class MicInput {
         short[] buf = new short[rate / 25];        // 40 ms a la frequence native
         try {
             rec.startRecording();
-            while (running) {
+            while (current(capture)) {
                 int n = rec.read(buf, 0, buf.length);
                 if (n <= 0) continue;
                 short[] f = to16k(buf, n, rate);
@@ -133,7 +152,7 @@ public class MicInput {
 
     private void sendLoop() {
         long next = System.nanoTime();
-        while (running) {
+        while (current(sender)) {
             next += 40000000L;
             long wait = (next - System.nanoTime()) / 1000000L;
             if (wait > 0) {

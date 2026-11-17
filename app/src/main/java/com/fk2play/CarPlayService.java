@@ -77,6 +77,8 @@ public class CarPlayService extends Service implements DongleListener,
     private static final long BACKGROUND_DECODE_GRACE_MS = 4000;
     private volatile String baseStatus = "Connexion au dongle...";
     private boolean permissionPending;
+    /** Service detruit : les taches deja en file (erreur de session...) ne doivent plus rien relancer. */
+    private volatile boolean destroyed;
     private boolean connecting;
     private DongleSession lastSession;
     private String simFile;
@@ -111,10 +113,14 @@ public class CarPlayService extends Service implements DongleListener,
     @Override
     public void onDestroy() {
         instance = null;
-        MediaKeys.release(this);
+        destroyed = true;
         steering.unbind();
         unregisterReceiver(usbReceiver);
         disconnect();
+        // Plus aucune tache differee (nouvelle tentative, retour d'appel, reprise des touches
+        // multimedia) ne doit s'executer sur un service detruit.
+        handler.removeCallbacksAndMessages(null);
+        MediaKeys.release(this);
         video.release();
         audio.release();
         stopForeground(true);
@@ -190,6 +196,7 @@ public class CarPlayService extends Service implements DongleListener,
     // ---------------------------------------------------------------- Connexion USB
 
     private void connect() {
+        if (destroyed) return;
         synchronized (this) {
             if (session != null || connecting) return;
         }
@@ -208,7 +215,8 @@ public class CarPlayService extends Service implements DongleListener,
             if (!permissionPending) {
                 permissionPending = true;
                 status("Autorisez l'acces au dongle USB", true, false);
-                PendingIntent pi = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), 0);
+                PendingIntent pi = PendingIntent.getBroadcast(this, 0,
+                        new Intent(ACTION_USB_PERMISSION).setPackage(getPackageName()), 0);
                 usb.requestPermission(dongle, pi);
             }
             return;
@@ -268,7 +276,7 @@ public class CarPlayService extends Service implements DongleListener,
      * a jour pendant l'appel : elle s'affiche instantanement.
      */
     private final Runnable claimMediaKeys = new Runnable() {
-        public void run() { MediaKeys.claim(CarPlayService.this); }
+        public void run() { if (!destroyed) MediaKeys.claim(CarPlayService.this); }
     };
 
     private final Runnable bringBack = new Runnable() {
@@ -317,13 +325,20 @@ public class CarPlayService extends Service implements DongleListener,
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context c, Intent i) {
+            // Ce recepteur est ouvert a toutes les applis de l'autoradio (enregistrement dynamique
+            // sans permission) : on ne croit pas le contenu de la diffusion, on reverifie l'etat
+            // reel aupres d'Android (permission accordee ? dongle encore sur le bus ?).
             if (ACTION_USB_PERMISSION.equals(i.getAction())) {
                 permissionPending = false;
-                if (i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) connect();
-                else status("Permission USB refusee", true, false);
+                UsbDevice dongle = findDongle();
+                if (dongle != null && usb.hasPermission(dongle)) connect();
+                else if (dongle != null) status("Permission USB refusee", true, false);
+                else connect();
             } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(i.getAction())) {
                 UsbDevice d = (UsbDevice) i.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                if (UsbTransport.isDongle(d)) {
+                if (UsbTransport.isDongle(d) && findDongle() == null) {
+                    // La demande de permission en cours concernait le dongle retire.
+                    permissionPending = false;
                     disconnect();
                     if (ui == null) {
                         // Dongle retire pendant que FK2Play est en arriere-plan : on s'arrete.
@@ -444,6 +459,7 @@ public class CarPlayService extends Service implements DongleListener,
         status("Erreur : " + e.getMessage() + " - nouvelle tentative...", true, false);
         handler.post(new Runnable() {
             public void run() {
+                if (destroyed) return;
                 disconnect();
                 handler.postDelayed(retry, RETRY_MS);
             }
@@ -490,6 +506,10 @@ public class CarPlayService extends Service implements DongleListener,
         VideoPipeline.forceDisplayThread = "on".equals(dt) ? Boolean.TRUE : "off".equals(dt) ? Boolean.FALSE : null;
         try {
             com.fk2play.video.FfmpegDecoder.forcedFormat = Integer.parseInt(p.getString("video_format", "0"));
+        } catch (NumberFormatException ignored) { }
+        try {
+            int t = Integer.parseInt(p.getString("decode_threads", "0"));
+            com.fk2play.video.FfmpegDecoder.forcedThreads = t >= 0 && t <= 4 ? t : 0;
         } catch (NumberFormatException ignored) { }
         return c;
     }

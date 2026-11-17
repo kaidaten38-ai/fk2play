@@ -88,6 +88,13 @@
             android:defaultValue="0"
             android:entries="@array/video_format_labels"
             android:entryValues="@array/video_format_values" />
+        <ListPreference
+            android:key="decode_threads"
+            android:title="Threads de decodage video"
+            android:summary="Automatique : coeurs allumes a l'ouverture. Pris en compte au prochain demarrage du decodeur."
+            android:defaultValue="0"
+            android:entries="@array/decode_threads_labels"
+            android:entryValues="@array/decode_threads_values" />
         <CheckBoxPreference
             android:key="show_keycodes"
             android:title="Afficher le code des touches"

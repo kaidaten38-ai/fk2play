@@ -1,5 +1,7 @@
 #pragma once
 #include <stdint.h>
+#define WINDOW_FORMAT_RGBA_8888 1
+#define WINDOW_FORMAT_RGBX_8888 2
 #define WINDOW_FORMAT_RGB_565 4
 typedef struct ANativeWindow ANativeWindow;
 typedef struct { int32_t width, height, stride, format; void *bits; uint32_t reserved[6]; } ANativeWindow_Buffer;
